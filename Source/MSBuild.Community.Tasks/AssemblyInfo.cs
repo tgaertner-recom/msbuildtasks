@@ -104,11 +104,17 @@ namespace MSBuild.Community.Tasks
         private const string CPP = "CPP";
         private const string FSharp_cl = "FS";
 
-        private const string CppCodeProviderAssembly = "CppCodeProvider, "+
-                                                       "Version=8.0.0.0, " +
-                                                       "Culture=neutral, " +
-                                                       "PublicKeyToken=b03f5f7f11d50a3a, " +
-                                                       "processorArchitecture=MSIL";
+        private const string CppCodeProviderAssembly8 = "CppCodeProvider, " +
+                                                        "Version=8.0.0.0, " +
+                                                        "Culture=neutral, " +
+                                                        "PublicKeyToken=b03f5f7f11d50a3a, " +
+                                                        "processorArchitecture=MSIL";
+
+        private const string CppCodeProviderAssembly10 = "CppCodeProvider, " +
+                                                         "Version=10.0.0.0, " +
+                                                         "Culture=neutral, " +
+                                                         "PublicKeyToken=b03f5f7f11d50a3a, " +
+                                                         "processorArchitecture=MSIL";
 
         private const string CppCodeProviderType = "Microsoft.VisualC.CppCodeProvider";
 
@@ -567,7 +573,7 @@ namespace MSBuild.Community.Tasks
             }
 
             // Generate code with the chosen provider
-            provider.GenerateCodeFromCompileUnit(codeCompileUnit, writer, new CodeGeneratorOptions());
+            provider?.GenerateCodeFromCompileUnit(codeCompileUnit, writer, new CodeGeneratorOptions());
         }
 
         private CodeDomProvider GetProviderAndSetExtension(string codeLanguage, ref string outputFile)
@@ -576,9 +582,7 @@ namespace MSBuild.Community.Tasks
 
             if (!_codeLangMapping.TryGetValue(codeLanguage, out codeLang))
             {
-                throw new NotSupportedException("The specified code language is not supported: '" +
-                                                CodeLanguage +
-                                                "'");
+                throw new NotSupportedException($"The specified code language is not supported: '{this.CodeLanguage}'");
             }
 
             CodeDomProvider provider;
@@ -593,19 +597,38 @@ namespace MSBuild.Community.Tasks
                     provider = new Microsoft.VisualBasic.VBCodeProvider();
                     outputFile = Path.ChangeExtension(outputFile, ".vb");
                     break;
-                case FSharp_cl:
-                    provider = new FSharp.Compiler.CodeDom.FSharpCodeProvider();
-                    outputFile = Path.ChangeExtension(outputFile, ".fs");
-                    break;
+                //case FSharp_cl:
+                //    provider = new FSharp.Compiler.CodeDom.FSharpCodeProvider();
+                //    outputFile = Path.ChangeExtension(outputFile, ".fs");
+                //    break;
                 case CPP:
                     // We load the CppCodeProvider via reflection since a hard reference would 
                     // require client machines to have the provider installed just to run the task.
                     // This way relieves us of the dependency.
                     try
                     {
-                        Assembly cppCodeProvider = Assembly.Load(CppCodeProviderAssembly);
-                        provider = cppCodeProvider.CreateInstance(CppCodeProviderType) 
-                                        as CodeDomProvider;
+                        Assembly cppCodeProvider;
+
+                        try
+                        {
+                            Log.LogMessage("Trying v8 C++/CLI code provider.");
+                            cppCodeProvider = Assembly.Load(CppCodeProviderAssembly8);
+                        }
+                        catch (FileNotFoundException)
+                        {
+                            try
+                            {
+                                Log.LogMessage("Trying v10 C++/CLI code provider.");
+                                cppCodeProvider = Assembly.Load(CppCodeProviderAssembly10);
+                            }
+                            catch (FileNotFoundException)
+                            {
+                                Log.LogMessage("Trying CppCodeProvider.dll");
+                                cppCodeProvider = Assembly.LoadFile("CppCodeProvider.dll");
+                            }
+                        }
+
+                        provider = cppCodeProvider?.CreateInstance(CppCodeProviderType) as CodeDomProvider;
                     }
                     catch(FileLoadException fileLoadEx)
                     {
@@ -622,7 +645,7 @@ namespace MSBuild.Community.Tasks
                     }
                     catch (FileNotFoundException)
                     {
-                        Log.LogError("The C++/CLI code provider wasn't found. "+
+                        Log.LogError("No C++/CLI code provider was found. " +
                                      "Make sure you have Visual C++ installed.");
                         provider = null;
                     }
@@ -686,12 +709,17 @@ namespace MSBuild.Community.Tasks
         {
 
             var codeAttributeDeclaration = new CodeAttributeDeclaration("System.Security.Permissions.SecurityPermissionAttribute");
+            codeAttributeDeclaration.Arguments.Clear();
 
-            var requestMinimum = new CodeAttributeArgument(
-                new CodeFieldReferenceExpression(
-                    new CodeTypeReferenceExpression(typeof(SecurityAction)), "RequestMinimum"));
+            // C4947: 'System::Security::Permissions::SecurityAction::RequestMinimum': marked as obsolete
+            // 'Assembly level declarative security is obsolete and is no longer enforced by the CLR by default.
+            // See http://go.microsoft.com/fwlink/?LinkID=155570 for more information.'
 
-            codeAttributeDeclaration.Arguments.Add(requestMinimum);
+            //var requestMinimum = new CodeAttributeArgument(
+            //    new CodeFieldReferenceExpression(
+            //        new CodeTypeReferenceExpression(typeof(SecurityAction)), "RequestMinimum"));
+
+            //codeAttributeDeclaration.Arguments.Add(requestMinimum);
 
             bool typedValue;
             if (!bool.TryParse(value, out typedValue))
